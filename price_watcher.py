@@ -11,24 +11,36 @@ PRICE_RE = re.compile(r"€\s*\d{1,3}(?:\.\d{3})*,\d{2}")
 
 def fetch_price():
     hdrs = {
-        "User-Agent":"Mozilla/5.0",
-        "Accept-Language":"it-IT,it;q=0.9,en;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.google.com/"
     }
     r = requests.get(URL, headers=hdrs, timeout=20)
     r.raise_for_status()
-    s = BeautifulSoup(r.text, "html.parser")
-    txt = s.get_text(" ", strip=True)
-    candidates = PRICE_RE.findall(txt)
-    if not candidates:
-        raise RuntimeError("Prezzo non trovato nella pagina")
-    # prendo il valore numericamente più basso > 100€ (di solito è il prezzo SKU)
-    def to_float(eur):
-        n = eur.replace("€", "").replace(".", "").replace(" ", "").replace("\xa0","").replace(",", ".")
-        return float(n)
-    nums = [to_float(c) for c in candidates]
-    nums = [n for n in nums if n > 100]
-    price = min(nums) if nums else to_float(candidates[0])
-    return price
+    html = r.text
+
+    # DEBUG: salva i primi 5000 caratteri per capire cosa arriva
+    Path("last_response.html").write_text(html[:5000])
+
+    s = BeautifulSoup(html, "html.parser")
+
+    # cerca direttamente elementi col prezzo
+    price_tag = s.select_one(".price, .product-price, span.price")
+    if price_tag:
+        raw = price_tag.get_text(strip=True)
+    else:
+        # fallback regex
+        txt = s.get_text(" ", strip=True)
+        candidates = PRICE_RE.findall(txt)
+        if not candidates:
+            raise RuntimeError("Prezzo non trovato nella pagina")
+        raw = candidates[0]
+
+    n = raw.replace("€", "").replace(".", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
+    return float(n)
 
 def load_state():
     if STATE_FILE.exists():
