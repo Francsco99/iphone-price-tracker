@@ -1,44 +1,26 @@
-import os, re, json, time, argparse, requests
+import os, json, time, argparse, re
 from pathlib import Path
-from bs4 import BeautifulSoup
+import requests
+from playwright.sync_api import sync_playwright
 
 URL = "https://www.liveyourphone.it/iphone-apple-iphone-16-128gb-bianco.1.1.8.gp.318.uw"
 STATE_FILE = Path("price_state.json")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-PRICE_RE = re.compile(r"€\s*\d{1,3}(?:\.\d{3})*,\d{2}")
-
 def fetch_price():
-    hdrs = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.google.com/"
-    }
-    r = requests.get(URL, headers=hdrs, timeout=20)
-    r.raise_for_status()
-    html = r.text
+    """Usa Playwright per simulare un browser e leggere il prezzo dalla pagina."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(locale="it-IT")
+        page.goto(URL, timeout=30000)
+        # aspetta che compaia un selettore col prezzo
+        sel = page.locator(".price, .product-price, span.price")
+        sel.wait_for(timeout=15000)
+        raw = sel.inner_text().strip()
+        browser.close()
 
-    # DEBUG: salva i primi 5000 caratteri per capire cosa arriva
-    Path("last_response.html").write_text(html[:5000])
-
-    s = BeautifulSoup(html, "html.parser")
-
-    # cerca direttamente elementi col prezzo
-    price_tag = s.select_one(".price, .product-price, span.price")
-    if price_tag:
-        raw = price_tag.get_text(strip=True)
-    else:
-        # fallback regex
-        txt = s.get_text(" ", strip=True)
-        candidates = PRICE_RE.findall(txt)
-        if not candidates:
-            raise RuntimeError("Prezzo non trovato nella pagina")
-        raw = candidates[0]
-
+    # normalizza
     n = raw.replace("€", "").replace(".", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
     return float(n)
 
@@ -50,7 +32,7 @@ def load_state():
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state))
 
-def send_telegram(msg):
+def send_telegram(msg: str):
     if not BOT_TOKEN or not CHAT_ID:
         raise RuntimeError("BOT_TOKEN o CHAT_ID mancanti")
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -60,14 +42,20 @@ def send_telegram(msg):
 
 def main(always=False):
     now = time.strftime("%Y-%m-%d %H:%M")
-    price = fetch_price()
+    try:
+        price = fetch_price()
+    except Exception as e:
+        send_telegram(f"❌ Errore durante fetch prezzo: {e}")
+        raise
+
     st = load_state()
     prev = st.get("price")
     if prev is None:
         st["price"] = price
         save_state(st)
-        send_telegram(f"🔎 Prezzo iniziale iPhone 16 128GB Bianco: €{price:,.2f} (al {now})".replace(",", "X").replace(".", ",").replace("X","."))
+        send_telegram(f"🔎 Prezzo iniziale: €{price:,.2f} (al {now})".replace(",", "X").replace(".", ",").replace("X","."))
         return
+
     changed = (abs(price - prev) > 1e-6)
     if changed or always:
         prefix = "🟢 CAMBIATO" if changed else "ℹ️ Report giornaliero"
@@ -75,12 +63,13 @@ def main(always=False):
         msg = f"{prefix}: ora €{price:,.2f}{delta}\nPagina: {URL}\n{now}"
         msg = msg.replace(",", "X").replace(".", ",").replace("X",".")
         send_telegram(msg)
+
     if changed:
         st["price"] = price
         save_state(st)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--always", action="store_true", help="Invia comunque un report anche senza variazioni")
+    ap.add_argument("--always", action="store_true", help="Invia sempre report anche senza variazioni")
     args = ap.parse_args()
     main(always=args.always)
