@@ -9,20 +9,22 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 def fetch_price():
-    """Usa Playwright per simulare un browser e leggere il prezzo dalla pagina."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(locale="it-IT")
-        page.goto(URL, timeout=30000)
-        # aspetta che compaia un selettore col prezzo
-        sel = page.locator(".price, .product-price, span.price")
-        sel.wait_for(timeout=15000)
-        raw = sel.inner_text().strip()
-        browser.close()
+        page = browser.new_page()
+        page.goto(URL, timeout=60000)
+        page.wait_for_selector("span.mainPriceAmount", timeout=30000)
 
-    # normalizza
-    n = raw.replace("€", "").replace(".", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
-    return float(n)
+        amount = page.locator("span.mainPriceAmount").inner_text().strip()
+        currency = page.locator("span.mainPriceCurrency").inner_text().strip()
+
+        # Normalizza formattazione
+        amount = amount.replace(".", "").replace(",", ".")  # gestisce "1.099,00"
+        price = float(amount)
+
+        browser.close()
+        print(f"Trovato prezzo: {price} {currency}")
+        return price
 
 def load_state():
     if STATE_FILE.exists():
